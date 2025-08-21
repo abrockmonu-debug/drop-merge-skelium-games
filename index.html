@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drop Merge Game</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+            overflow: hidden; /* Prevent scrolling */
+            flex-direction: column;
+        }
+        canvas {
+            border: 2px solid #333;
+            background-color: #fff;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            touch-action: none; /* Disable default touch actions like scrolling */
+            margin-top: 10px;
+        }
+        #topBar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 400px;
+            padding: 10px 0;
+        }
+        #scoreDisplay {
+            font-size: 2em;
+            font-weight: bold;
+            color: #333;
+        }
+        #nextBlockPreview {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #nextBlockPreview .label {
+            font-size: 0.9em;
+            color: #555;
+            margin-bottom: 5px;
+        }
+        #nextBlockCanvas {
+            border: 1px solid #ccc;
+            background-color: #eee;
+            border-radius: 5px;
+        }
+        #gameOverScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-size: 2.5em;
+            text-align: center;
+            z-index: 100;
+            display: none; /* Hidden by default */
+        }
+        #restartButton {
+            margin-top: 20px;
+            padding: 15px 30px;
+            font-size: 0.8em;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            transition: background-color 0.3s ease;
+        }
+        #restartButton:hover {
+            background-color: #45a049;
+        }
+
+        /* Power-up buttons */
+        #powerupBar {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 15px;
+            width: 400px;
+        }
+        .powerup-button {
+            padding: 10px 15px;
+            font-size: 1em;
+            border: 2px solid #333;
+            background-color: #eee;
+            border-radius: 8px;
+            cursor: pointer;
+            position: relative;
+            transition: background-color 0.2s ease, transform 0.1s ease;
+        }
+        .powerup-button:hover:not(.disabled) {
+            background-color: #ddd;
+            transform: scale(1.05);
+        }
+        .powerup-button.active {
+            background-color: #FFC72C;
+            border-color: #FF9B71;
+        }
+        .powerup-button.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .powerup-button .count {
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            background-color: #333;
+            color: white;
+            border-radius: 50%;
+            padding: 2px 7px;
+            font-size: 0.7em;
+            font-weight: bold;
+        }
+        #instructions {
+            margin-top: 15px;
+            font-size: 1.1em;
+            color: #555;
+            text-align: center;
+            min-height: 25px;
+        }
+    </style>
+</head>
+<body>
+    <div id="topBar">
+        <div id="scoreDisplay">Score: 0</div>
+        <div id="nextBlockPreview">
+            <div class="label">Next</div>
+            <canvas id="nextBlockCanvas" width="40" height="40"></canvas>
+        </div>
+    </div>
+    
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="powerupBar">
+        <button id="swapButton" class="powerup-button">Swap <span class="count" id="swapCount">0</span></button>
+        <button id="hammerButton" class="powerup-button">Hammer <span class="count" id="hammerCount">0</span></button>
+    </div>
+
+    <div id="instructions"></div>
+
+    <div id="gameOverScreen">
+        Game Over!
+        <button id="restartButton">Restart</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const nextBlockCanvas = document.getElementById('nextBlockCanvas');
+        const nextBlockCtx = nextBlockCanvas.getContext('2d');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const restartButton = document.getElementById('restartButton');
+        const instructionsDisplay = document.getElementById('instructions');
+
+        const swapButton = document.getElementById('swapButton');
+        const hammerButton = document.getElementById('hammerButton');
+        const swapCountSpan = document.getElementById('swapCount');
+        const hammerCountSpan = document.getElementById('hammerCount');
+
+        const CANVAS_WIDTH = 400;
+        const CANVAS_HEIGHT = 600;
+        const GRID_COLS = 5;
+        const GRID_ROWS = 10;
+        const CELL_SIZE = CANVAS_WIDTH / GRID_COLS;
+        const TOP_SPAWN_AREA_HEIGHT = CELL_SIZE * 2;
+
+        canvas.width = CANVAS_WIDTH;
+        canvas.height = CANVAS_HEIGHT;
+
+        const BLOCK_COLORS = {
+            2: '#E0BBE4', // Pastel Purple
+            4: '#957DAD', // Darker Pastel Purple
+            8: '#D291BC', // Pastel Pink
+            16: '#FFC72C', // Sunny Yellow
+            32: '#FF9B71', // Coral Orange
+            64: '#A0D9B1', // Mint Green
+            128: '#87CEEB', // Sky Blue
+            256: '#FF6F61', // Bright Red
+            512: '#6B5B95', // Deep Purple
+            1024: '#88B04B', // Olive Green
+            2048: '#F7CAC9', // Light Pink (goal)
+        };
+
+        let grid = [];
+        let currentBlock = null;
+        let nextBlockValue = 2;
+        let score = 0;
+        let isDropping = false;
+        let animationFrameId;
+        let gameOver = false;
+        let powerups = { swap: 0, hammer: 0 };
+        let activePowerup = null;
+        let selectedBlocks = []; // For the swap power-up
+
+        function initializeGame() {
+            grid = Array(GRID_ROWS).fill(null).map(() => Array(GRID_COLS).fill(0));
+            score = 0;
+            powerups = { swap: 0, hammer: 0 };
+            updateScoreAndPowerups();
+            currentBlock = null;
+            nextBlockValue = generateRandomBlockValue();
+            isDropping = false;
+            gameOver = false;
+            gameOverScreen.style.display = 'none';
+            instructionsDisplay.textContent = '';
+            
+            // Start with a small grace period before spawning
+            setTimeout(() => {
+                spawnNewBlock();
+            }, 500);
+
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            gameLoop();
+        }
+
+        function updateScoreAndPowerups() {
+            scoreDisplay.textContent = `Score: ${score}`;
+            swapCountSpan.textContent = powerups.swap;
+            hammerCountSpan.textContent = powerups.hammer;
+            
+            // Disable buttons if no powerups
+            swapButton.classList.toggle('disabled', powerups.swap === 0);
+            hammerButton.classList.toggle('disabled', powerups.hammer === 0);
+        }
+
+        function generateRandomBlockValue() {
+            const values = [2, 4, 8, 16];
+            return values[Math.floor(Math.random() * values.length)];
+        }
+
+        function spawnNewBlock() {
+            if (gameOver) return;
+
+            const spawnX = Math.floor(GRID_COLS / 2);
+            currentBlock = {
+                value: nextBlockValue,
+                x: spawnX,
+                y: 0,
+                isFalling: true
+            };
+            nextBlockValue = generateRandomBlockValue();
+            
+            // Check for game over condition
+            if (grid[currentBlock.y][currentBlock.x] !== 0) {
+                endGame();
+            }
+            
+            drawNextBlockPreview();
+        }
+        
+        // Function to grant powerups at certain score thresholds
+        function checkAndGrantPowerup() {
+            if (score > 0 && score % 1000 === 0) {
+                const powerupType = Math.random() < 0.5 ? 'swap' : 'hammer';
+                powerups[powerupType]++;
+                instructionsDisplay.textContent = `You earned a ${powerupType} power-up!`;
+                updateScoreAndPowerups();
+            }
+        }
+
+        function drawBlock(block, x, y, size) {
+            ctx.beginPath();
+            ctx.arc(x + size / 2, y + size / 2, size / 2 - 2, 0, Math.PI * 2);
+            ctx.fillStyle = BLOCK_COLORS[block.value] || '#ccc';
+            ctx.fill();
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.fillStyle = '#000';
+            ctx.font = `${size * 0.4}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(block.value, x + size / 2, y + size / 2);
+        }
+
+        function drawGrid() {
+            for (let r = 0; r < GRID_ROWS; r++) {
+                for (let c = 0; c < GRID_COLS; c++) {
+                    const blockValue = grid[r][c];
+                    if (blockValue !== 0) {
+                        drawBlock({ value: blockValue }, c * CELL_SIZE, r * CELL_SIZE, CELL_SIZE);
+                    }
+                }
+            }
+        }
+
+        function drawCurrentBlock() {
+            if (currentBlock) {
+                let ghostY = currentBlock.y;
+                while (ghostY + 1 < GRID_ROWS && grid[ghostY + 1][currentBlock.x] === 0) {
+                    ghostY++;
+                }
+                ctx.globalAlpha = 0.3;
+                drawBlock(currentBlock, currentBlock.x * CELL_SIZE, ghostY * CELL_SIZE, CELL_SIZE);
+                ctx.globalAlpha = 1.0;
+                drawBlock(currentBlock, currentBlock.x * CELL_SIZE, currentBlock.y * CELL_SIZE, CELL_SIZE);
+            }
+        }
+
+        function drawNextBlockPreview() {
+            nextBlockCtx.clearRect(0, 0, nextBlockCanvas.width, nextBlockCanvas.height);
+            const previewSize = nextBlockCanvas.width;
+            nextBlockCtx.beginPath();
+            nextBlockCtx.arc(previewSize / 2, previewSize / 2, previewSize / 2 - 2, 0, Math.PI * 2);
+            nextBlockCtx.fillStyle = BLOCK_COLORS[nextBlockValue] || '#ccc';
+            nextBlockCtx.fill();
+            nextBlockCtx.strokeStyle = '#333';
+            nextBlockCtx.lineWidth = 2;
+            nextBlockCtx.stroke();
+            nextBlockCtx.fillStyle = '#000';
+            nextBlockCtx.font = `${previewSize * 0.4}px Arial`;
+            nextBlockCtx.textAlign = 'center';
+            nextBlockCtx.textBaseline = 'middle';
+            nextBlockCtx.fillText(nextBlockValue, previewSize / 2, previewSize / 2);
+        }
+        
+        function drawSelectionBox() {
+            if (activePowerup === 'swap' && selectedBlocks.length > 0) {
+                const { x, y } = selectedBlocks[0];
+                ctx.strokeStyle = 'cyan';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+            }
+        }
+
+        function placeBlock(block) {
+            if (block.y >= 0 && block.y < GRID_ROWS && block.x >= 0 && block.x < GRID_COLS) {
+                grid[block.y][block.x] = block.value;
+            }
+        }
+
+        function checkAndMerge() {
+            let mergedThisTurn = true;
+            while (mergedThisTurn) {
+                mergedThisTurn = false;
+                let changesMade = false;
+                // Horizontal merges
+                for (let r = 0; r < GRID_ROWS; r++) {
+                    for (let c = 0; c < GRID_COLS - 1; c++) {
+                        if (grid[r][c] !== 0 && grid[r][c] === grid[r][c+1]) {
+                            const mergedValue = grid[r][c] * 2;
+                            score += mergedValue;
+                            grid[r][c] = mergedValue;
+                            grid[r][c+1] = 0;
+                            changesMade = true;
+                            mergedThisTurn = true;
+                        }
+                    }
+                }
+
+                // Vertical merges
+                for (let c = 0; c < GRID_COLS; c++) {
+                    for (let r = 0; r < GRID_ROWS - 1; r++) {
+                        if (grid[r][c] !== 0 && grid[r][c] === grid[r+1][c]) {
+                            const mergedValue = grid[r][c] * 2;
+                            score += mergedValue;
+                            grid[r][c] = mergedValue;
+                            grid[r+1][c] = 0;
+                            changesMade = true;
+                            mergedThisTurn = true;
+                        }
+                    }
+                }
+
+                // Gravity after merges
+                if (changesMade) {
+                    for (let c = 0; c < GRID_COLS; c++) {
+                        let emptyRows = 0;
+                        for (let r = GRID_ROWS - 1; r >= 0; r--) {
+                            if (grid[r][c] === 0) {
+                                emptyRows++;
+                            } else if (emptyRows > 0) {
+                                grid[r + emptyRows][c] = grid[r][c];
+                                grid[r][c] = 0;
+                            }
+                        }
+                    }
+                }
+            }
+            updateScoreAndPowerups();
+            checkAndGrantPowerup();
+        }
+
+        function endGame() {
+            gameOver = true;
+            gameOverScreen.style.display = 'flex';
+            cancelAnimationFrame(animationFrameId);
+        }
+
+        function gameLoop() {
+            ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+            drawGrid();
+            drawCurrentBlock();
+            drawSelectionBox();
+            if (!gameOver) {
+                animationFrameId = requestAnimationFrame(gameLoop);
+            }
+        }
+
+        // --- Game Logic ---
+
+        function moveBlock(direction) {
+            if (gameOver || !currentBlock || isDropping) return;
+            const newX = currentBlock.x + direction;
+            if (newX >= 0 && newX < GRID_COLS) {
+                currentBlock.x = newX;
+            }
+        }
+
+        function dropBlock() {
+            if (gameOver || !currentBlock || isDropping) return;
+            isDropping = true;
+            const dropInterval = setInterval(() => {
+                if (currentBlock.y + 1 < GRID_ROWS && grid[currentBlock.y + 1][currentBlock.x] === 0) {
+                    currentBlock.y++;
+                } else {
+                    clearInterval(dropInterval);
+                    isDropping = false;
+                    currentBlock.isFalling = false;
+                    placeBlock(currentBlock);
+                    checkAndMerge();
+                    spawnNewBlock();
+                }
+            }, 50);
+        }
+        
+        // --- Power-up Functions ---
+        
+        function activatePowerup(type) {
+            if (activePowerup === type) {
+                activePowerup = null;
+                selectedBlocks = [];
+                instructionsDisplay.textContent = '';
+                swapButton.classList.remove('active');
+                hammerButton.classList.remove('active');
+                return;
+            }
+            
+            if (powerups[type] > 0) {
+                activePowerup = type;
+                selectedBlocks = [];
+                swapButton.classList.remove('active');
+                hammerButton.classList.remove('active');
+                document.getElementById(`${type}Button`).classList.add('active');
+                
+                if (type === 'swap') {
+                    instructionsDisplay.textContent = 'Select two blocks to swap.';
+                } else if (type === 'hammer') {
+                    instructionsDisplay.textContent = 'Select a block to remove.';
+                }
+            }
+        }
+
+        function handlePowerupClick(r, c) {
+            if (activePowerup === 'hammer') {
+                if (grid[r][c] !== 0) {
+                    grid[r][c] = 0;
+                    powerups.hammer--;
+                    activePowerup = null;
+                    instructionsDisplay.textContent = 'Block removed!';
+                    hammerButton.classList.remove('active');
+                    checkAndMerge(); // Check for new merges after removal
+                }
+            } else if (activePowerup === 'swap') {
+                if (grid[r][c] !== 0) {
+                    selectedBlocks.push({ r, c });
+                    if (selectedBlocks.length === 2) {
+                        const block1 = selectedBlocks[0];
+                        const block2 = selectedBlocks[1];
+                        
+                        // Perform the swap
+                        const temp = grid[block1.r][block1.c];
+                        grid[block1.r][block1.c] = grid[block2.r][block2.c];
+                        grid[block2.r][block2.c] = temp;
+                        
+                        powerups.swap--;
+                        activePowerup = null;
+                        selectedBlocks = [];
+                        instructionsDisplay.textContent = 'Blocks swapped!';
+                        swapButton.classList.remove('active');
+                        checkAndMerge(); // Check for new merges after swap
+                    }
+                }
+            }
+        }
+
+        // --- Event Listeners ---
+
+        document.addEventListener('keydown', (e) => {
+            if (gameOver) {
+                if (e.key === 'R' || e.key === 'r') {
+                    initializeGame();
+                }
+                return;
+            }
+            if (e.key === 'ArrowLeft' || e.key === 'a') {
+                moveBlock(-1);
+            } else if (e.key === 'ArrowRight' || e.key === 'd') {
+                moveBlock(1);
+            } else if (e.key === 'ArrowDown' || e.key === 's' || e.key === ' ') {
+                dropBlock();
+            }
+        });
+        
+        canvas.addEventListener('click', (e) => {
+            if (gameOver) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            const r = Math.floor(clickY / CELL_SIZE);
+            const c = Math.floor(clickX / CELL_SIZE);
+
+            if (activePowerup) {
+                handlePowerupClick(r, c);
+            } else {
+                // Drop block logic
+                const col = Math.floor(clickX / CELL_SIZE);
+                if (currentBlock) {
+                    currentBlock.x = col;
+                }
+                dropBlock();
+            }
+        });
+
+        swapButton.addEventListener('click', () => {
+            activatePowerup('swap');
+        });
+        
+        hammerButton.addEventListener('click', () => {
+            activatePowerup('hammer');
+        });
+
+        restartButton.addEventListener('click', initializeGame);
+
+        // Slow continuous fall for the block
+        setInterval(() => {
+            if (!isDropping && currentBlock && currentBlock.isFalling && !gameOver) {
+                if (currentBlock.y + 1 < GRID_ROWS && grid[currentBlock.y + 1][currentBlock.x] === 0) {
+                    currentBlock.y++;
+                } else {
+                    currentBlock.isFalling = false;
+                    placeBlock(currentBlock);
+                    checkAndMerge();
+                    spawnNewBlock();
+                }
+            }
+        }, 800);
+
+        // Start the game
+        initializeGame();
+    </script>
+</body>
+</html>
